@@ -55,7 +55,7 @@ def train_model(
         lr: float = 1e-3,
         num_epochs: int = 25,
         margin: float = 20.0,
-        eval_margin: float = 10.0,
+        eval_margin: float = 5.0,
         max_epochs_no_improvement: int = 7,
         train_batch_size: int = 64,
         test_batch_size: int = 64,
@@ -109,7 +109,7 @@ def train_model(
             loss.backward()
             opt.step()
             with torch.no_grad():
-                train_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=margin)
+                train_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=eval_margin)
                 train_loss += loss.sum().item()
         train_loss /= len(train_dataset)
         train_accuracy = train_num_correct / (len(train_dataset) * 2)
@@ -122,7 +122,7 @@ def train_model(
                 ax, px, nx = ax.cuda(), px.cuda(), nx.cuda()
                 av, pv, nv = get_triplet_embedding(model=model, ax=ax, px=px, nx=nx)
                 loss = get_loss(loss_fn=loss_fn, av=av, pv=pv, nv=nv)
-                test_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=margin)
+                test_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=eval_margin)
                 test_loss += loss.sum().item()
         test_accuracy = test_num_correct / (len(test_dataset) * 2)
 
