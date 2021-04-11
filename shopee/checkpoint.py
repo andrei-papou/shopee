@@ -1,6 +1,7 @@
-from typing import Dict, Any, TypedDict, OrderedDict
+from typing import Dict, Any, OrderedDict
 
 import torch
+from typing_extensions import TypedDict
 
 
 class Checkpoint(TypedDict):
