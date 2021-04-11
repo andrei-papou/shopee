@@ -1,12 +1,12 @@
-from typing import Dict, Any, TypedDict
+from typing import Dict, Any, TypedDict, OrderedDict
 
 import torch
 
 
 class Checkpoint(TypedDict):
-    model_state_dict: Dict[str, Any]
+    model_state_dict: OrderedDict[str, torch.Tensor]
     opt_state_dict: Dict[str, Any]
-    lr_scheduler: object
+    lr_scheduler_state_dict: Dict[str, Any]
 
 
 def save_checkpoint(checkpoint: Checkpoint, path: str):

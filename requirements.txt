@@ -1,0 +1,7 @@
+numpy==1.*
+opencv-python==4.*
+pandas==1.*
+scikit-learn==0.*
+torch==1.*
+torchvision==0.*
+tqdm==4.*

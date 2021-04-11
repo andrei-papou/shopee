@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, Sequence
 
 import cv2
 import pandas as pd
@@ -88,3 +88,31 @@ class ImageTestPairDataset(Dataset):
         return load_image(self._image_folder_path / img_name_1), \
             load_image(self._image_folder_path / img_name_2), \
             torch.tensor([int(lg_1 == lg_2)])
+
+
+class PostingIdImageDataset(Dataset):
+
+    def __init__(self, df: pd.DataFrame, image_folder_path: Path):
+        self._df = df
+        self._image_folder_path = image_folder_path
+
+    def __len__(self) -> int:
+        return len(self._df)
+
+    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor]:
+        row = self._df.iloc[idx]
+        return row['posting_id'], load_image(self._image_folder_path / row['image'])
+
+
+class EmbeddingDataset(Dataset):
+
+    def __init__(self, embedding_dict: Dict[str, torch.Tensor]):
+        self._posting_id_list = [pi for pi in embedding_dict.keys()]
+        self._embedding_dict = embedding_dict
+
+    def __len__(self) -> int:
+        return len(self._posting_id_list)
+
+    def __getitem__(self, idx: int) -> Tuple[Sequence[str], torch.Tensor]:
+        posting_id = self._posting_id_list[idx]
+        return posting_id, self._embedding_dict[posting_id]
