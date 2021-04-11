@@ -55,12 +55,13 @@ def train_model(
         lr: float = 1e-3,
         num_epochs: int = 25,
         margin: float = 20.0,
-        eval_margin: float = 5.0,
+        eval_margin: float = 20.0,
         max_epochs_no_improvement: int = 7,
         train_batch_size: int = 64,
         test_batch_size: int = 64,
         num_workers: int = 2,
-        start_from_checkpoint_path: Optional[str] = None):
+        start_from_checkpoint_path: Optional[str] = None,
+        enable_eval: bool = False):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -126,16 +127,31 @@ def train_model(
                 test_loss += loss.sum().item()
         test_accuracy = test_num_correct / (len(test_dataset) * 2)
 
-        with torch.no_grad():
-            embedding_dict = get_embedding_dict(df=eval_df, model=model, data_path=image_folder_path, progress_bar=True)
-            true_matches_dict = get_true_matches_dict(df=eval_df, progress_bar=True)
-            pred_matches_dict = get_pred_matches_dict(
-                embedding_dict=embedding_dict, threshold=eval_margin, progress_bar=True)
-            f1_mean = get_f1_mean_for_matches(true_matches_dict=true_matches_dict, pred_matches_dict=pred_matches_dict)
+        if enable_eval:
+            with torch.no_grad():
+                embedding_dict = get_embedding_dict(
+                    df=eval_df,
+                    model=model,
+                    data_path=image_folder_path,
+                    progress_bar=True)
+                true_matches_dict = get_true_matches_dict(
+                    df=eval_df,
+                    progress_bar=True)
+                pred_matches_dict = get_pred_matches_dict(
+                    embedding_dict=embedding_dict,
+                    threshold=eval_margin,
+                    progress_bar=True)
+                f1_mean = get_f1_mean_for_matches(
+                    true_matches_dict=true_matches_dict,
+                    pred_matches_dict=pred_matches_dict)
+        else:
+            f1_mean = None
 
         lr_scheduler.step(test_accuracy)
 
-        print(f'epoch: {ep}, train_accuracy: {train_accuracy}, test_accuracy: {test_accuracy}, f1_mean: {f1_mean}')
+        print(
+            f'epoch: {ep}, train_accuracy: {train_accuracy}, test_accuracy: {test_accuracy}' +
+            (f', f1_mean: {f1_mean}' if f1_mean is not None else ''))
 
         if test_accuracy > best_accuracy:
             print(f'Best accuracy improved: {test_accuracy} vs {best_accuracy}. Saving the model.')
