@@ -1,6 +1,8 @@
 env
 models
 notebooks/.ipynb_checkpoints
-runs
+tensorboard_logs
 .idea
 **/__pycache__
+logs
+checkpoints

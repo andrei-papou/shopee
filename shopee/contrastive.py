@@ -1,172 +1,168 @@
 from pathlib import Path
-from typing import Tuple, Callable, Optional
+from typing import Optional, List
 
 import pandas as pd
 import torch
-from torch.optim import Adam
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.loggers import LightningLoggerBase
+from torch.optim import SGD
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from shopee.checkpoint import save_checkpoint, load_checkpoint
+from shopee.backbones import ResNet18, Backbone
+from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import RandomTripletImageDataset, PrecomputedTripletImageDataset
-from shopee.evaluation import get_embedding_dict, get_true_matches_dict, get_pred_matches_dict, get_f1_mean_for_matches
-from shopee.loss import ContrastiveLoss
-from shopee.models import ResNet18
+from shopee.evaluation import evaluate_generic_model
+from shopee.metrics import get_triplet_accuracy_components
+from shopee.module import Module, StepResult
+from shopee.types import Triplet, TripletTuple, OptimizerConfig
 
 
-def get_triplet_embedding(
-        model: torch.nn.Module,
-        ax: torch.Tensor,
-        px: torch.Tensor,
-        nx: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    v = model(torch.cat([ax, px, nx], dim=0))
-    split_size = int(v.shape[0] / 3)
-    return v[:split_size], v[split_size:split_size * 2], v[split_size * 2:]
+class ContrastiveLoss(torch.nn.Module):
+
+    def __init__(self, margin: float):
+        super().__init__()
+        self._margin = margin
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        :param x1: Tensor of shape (N, D) where N - batch size, D - embedding dimensionality.
+        Embeddings of the first batch.
+        :param x2: Tensor of shape (N, D) where N - batch size, D - embedding dimensionality.
+        Embeddings of the second batch.
+        :param y: Tensor of shape (N,) where N - batch size, with values either 0 or 1.
+        0 stands for the samples of the same class, 1 - different classes.
+        :return: Tensor of shape (N,) where each element is the contrastive loss value between
+        corresponding samples from x1 and x2.
+        """
+        dist = torch.cdist(x1.unsqueeze(1), x2.unsqueeze(1)).squeeze()
+        same_mask, diff_mask = y, (~y.bool()).int()  # type: (torch.Tensor, torch.Tensor)
+        ones = torch.ones(*dist.shape).cuda()
+        zeros = torch.zeros(*dist.shape).cuda()
+        dist_to_margin = torch.max(ones * self._margin - dist, zeros)
+
+        loss = dist * same_mask + dist_to_margin * diff_mask
+        return loss.mean()
+
+    def forward_triplet(self, t: Triplet) -> torch.Tensor:
+        n = t.a.shape[0]
+        pos_loss = self(t.a, t.p, torch.ones(n).cuda())
+        neg_loss = self(t.a, t.n, torch.zeros(n).cuda())
+        return (pos_loss + neg_loss) / 2
 
 
-def get_loss(
-        loss_fn: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor],
-        av: torch.Tensor,
-        pv: torch.Tensor,
-        nv: torch.Tensor) -> torch.Tensor:
-    n = av.shape[0]
-    pos_loss = loss_fn(av, pv, torch.ones(n).cuda())
-    neg_loss = loss_fn(av, nv, torch.zeros(n).cuda())
-    return (pos_loss + neg_loss) / 2
+class ContrastiveModel(Module):
 
+    def __init__(self, backbone: Backbone, lr: float = 1e-3, momentum: float = 0.9, margin: float = 1.0):
+        super().__init__()
+        self.model = backbone
+        self.lr = lr
+        self.momentum = momentum
+        self.loss_fn = ContrastiveLoss(margin=margin)
+        self.margin = margin
 
-def get_num_correct(
-        av: torch.Tensor,
-        pv: torch.Tensor,
-        nv: torch.Tensor,
-        margin: float) -> int:
-    av = torch.unsqueeze(av, dim=1)
-    pv = torch.unsqueeze(pv, dim=1)
-    nv = torch.unsqueeze(nv, dim=1)
-    return (torch.cdist(av, pv) <= margin).int().sum().item() + \
-           (torch.cdist(av, nv) > margin).int().sum().item()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
+
+    def _forward_triplet(self, triplet: Triplet) -> Triplet:
+        return Triplet.from_first_dim_split(self(triplet.join()))
+
+    def _step(self, batch: TripletTuple, batch_idx: int) -> StepResult:
+        out = self._forward_triplet(Triplet.from_tuple(batch))
+        loss = self.loss_fn.forward_triplet(out)
+        num_correct, num_total = get_triplet_accuracy_components(out, margin=self.margin)
+        return {'loss': loss, 'num_correct': num_correct, 'num_total': num_total}
+
+    def training_step(self, batch: TripletTuple, batch_idx: int) -> StepResult:
+        return self._step(batch, batch_idx)
+
+    def validation_step(self, batch: TripletTuple, batch_idx: int) -> StepResult:
+        return self._step(batch, batch_idx)
+
+    def configure_optimizers(self) -> OptimizerConfig:
+        optimizer = SGD(self.parameters(), lr=self.lr, momentum=self.momentum)
+        lr_scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.1, patience=3, verbose=True)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': lr_scheduler,
+            'monitor': 'valid_accuracy',
+        }
 
 
 def train_model(
         index_root_path: str,
         data_root_path: str,
-        checkpoint_path: str,
+        checkpoint_file_path: str,
+        logger: LightningLoggerBase,
         lr: float = 1e-3,
+        momentum: float = 0.9,
         num_epochs: int = 25,
-        margin: float = 20.0,
-        eval_margin: float = 20.0,
+        margin: float = 1.0,
         max_epochs_no_improvement: int = 7,
         train_batch_size: int = 64,
-        test_batch_size: int = 64,
+        valid_batch_size: int = 64,
+        accumulate_grad_batches: int = 1,
         num_workers: int = 2,
-        start_from_checkpoint_path: Optional[str] = None,
-        enable_eval: bool = False):
+        start_from_checkpoint_path: Optional[str] = None):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
     index_root_path = Path(index_root_path)
     train_df = pd.read_csv(index_root_path / 'train-set.csv')
     test_pair_df = pd.read_csv(index_root_path / 'test_triplets.csv')
-    eval_df = pd.read_csv(index_root_path / 'test-set.csv')
 
     train_dataset = RandomTripletImageDataset(df=train_df, image_folder_path=image_folder_path)
-    test_dataset = PrecomputedTripletImageDataset(df=test_pair_df, image_folder_path=image_folder_path)
+    valid_dataset = PrecomputedTripletImageDataset(df=test_pair_df, image_folder_path=image_folder_path)
     train_data_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,
         num_workers=num_workers,
         pin_memory=True,
         shuffle=True)
-    test_data_loader = DataLoader(
-        dataset=test_dataset,
-        batch_size=test_batch_size,
+    valid_data_loader = DataLoader(
+        dataset=valid_dataset,
+        batch_size=valid_batch_size,
         num_workers=num_workers,
         pin_memory=True)
 
-    model = ResNet18().cuda()
-    loss_fn = ContrastiveLoss(margin=margin)
-    opt = Adam(model.parameters(), lr=lr)
-    lr_scheduler = ReduceLROnPlateau(optimizer=opt, mode='max', factor=0.1, patience=3)
-    if start_from_checkpoint_path is not None:
-        checkpoint_dict = load_checkpoint(start_from_checkpoint_path)
-        model.load_state_dict(checkpoint_dict['model_state_dict'])
-        opt.load_state_dict(checkpoint_dict['opt_state_dict'])
-        lr_scheduler.load_state_dict(checkpoint_dict['lr_scheduler_state_dict'])
+    checkpoint_callback = create_checkpoint_callback(checkpoint_file_path=checkpoint_file_path)
+    early_stopping_callback = EarlyStopping(
+        monitor='valid_accuracy',
+        mode='max',
+        patience=max_epochs_no_improvement)
+    backbone = ResNet18(pretrained=start_from_checkpoint_path is None)
+    model = ContrastiveModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin)
+    trainer = Trainer(
+        auto_lr_find=True,
+        gpus=1,
+        auto_select_gpus=True,
+        max_epochs=num_epochs,
+        logger=logger,
+        resume_from_checkpoint=start_from_checkpoint_path,
+        accumulate_grad_batches=accumulate_grad_batches,
+        callbacks=[
+            checkpoint_callback,
+            early_stopping_callback,
+        ])
+    trainer.fit(
+        model=model,
+        train_dataloader=train_data_loader,
+        val_dataloaders=valid_data_loader)
 
-    best_accuracy = 0.0
-    epochs_no_improvement = 0
 
-    for ep in range(num_epochs):
-        model.train(True)
-
-        train_num_correct = 0
-        train_loss = 0.0
-        for ax, px, nx in tqdm(train_data_loader, total=len(train_data_loader), desc='training'):
-            opt.zero_grad()
-            ax, px, nx = ax.cuda(), px.cuda(), nx.cuda()
-            av, pv, nv = get_triplet_embedding(model=model, ax=ax, px=px, nx=nx)
-            loss = get_loss(loss_fn=loss_fn, av=av, pv=pv, nv=nv)
-            loss.backward()
-            opt.step()
-            with torch.no_grad():
-                train_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=eval_margin)
-                train_loss += loss.sum().item()
-        train_loss /= len(train_dataset)
-        train_accuracy = train_num_correct / (len(train_dataset) * 2)
-
-        model.eval()
-        test_num_correct = 0
-        test_loss = 0.0
-        with torch.no_grad():
-            for ax, px, nx in tqdm(test_data_loader, total=len(test_data_loader), desc='validation'):
-                ax, px, nx = ax.cuda(), px.cuda(), nx.cuda()
-                av, pv, nv = get_triplet_embedding(model=model, ax=ax, px=px, nx=nx)
-                loss = get_loss(loss_fn=loss_fn, av=av, pv=pv, nv=nv)
-                test_num_correct += get_num_correct(av=av, pv=pv, nv=nv, margin=eval_margin)
-                test_loss += loss.sum().item()
-        test_accuracy = test_num_correct / (len(test_dataset) * 2)
-
-        if enable_eval:
-            with torch.no_grad():
-                embedding_dict = get_embedding_dict(
-                    df=eval_df,
-                    model=model,
-                    data_path=image_folder_path,
-                    progress_bar=True)
-                true_matches_dict = get_true_matches_dict(
-                    df=eval_df,
-                    progress_bar=True)
-                pred_matches_dict = get_pred_matches_dict(
-                    embedding_dict=embedding_dict,
-                    threshold=eval_margin,
-                    progress_bar=True)
-                f1_mean = get_f1_mean_for_matches(
-                    true_matches_dict=true_matches_dict,
-                    pred_matches_dict=pred_matches_dict)
-        else:
-            f1_mean = None
-
-        lr_scheduler.step(test_accuracy)
-
-        print(
-            f'epoch: {ep}, train_accuracy: {train_accuracy}, test_accuracy: {test_accuracy}' +
-            (f', f1_mean: {f1_mean}' if f1_mean is not None else ''))
-
-        if test_accuracy > best_accuracy:
-            print(f'Best accuracy improved: {test_accuracy} vs {best_accuracy}. Saving the model.')
-            save_checkpoint(checkpoint={
-                'model_state_dict': model.state_dict(),
-                'opt_state_dict': opt.state_dict(),
-                'lr_scheduler_state_dict': lr_scheduler.state_dict(),
-            }, path=checkpoint_path)
-            best_accuracy = test_accuracy
-            epochs_no_improvement = 0
-        else:
-            epochs_no_improvement += 1
-            print(f'No improvement in {epochs_no_improvement}/{max_epochs_no_improvement} epochs. '
-                  f'Best accuracy: {best_accuracy}.')
-
-        if epochs_no_improvement >= max_epochs_no_improvement:
-            print(f'No improvement in {max_epochs_no_improvement} epochs. Stopping the training.')
-            break
+def evaluate_model(
+        index_root_path: str,
+        data_root_path: str,
+        checkpoint_path: str,
+        margin_list: List[float],
+        batch_size: int = 64):
+    model = ContrastiveModel.load_from_checkpoint(
+        checkpoint_path=checkpoint_path,
+        backbone=ResNet18(pretrained=False)).cuda()
+    return evaluate_generic_model(
+        model=model,
+        index_root_path=index_root_path,
+        data_root_path=data_root_path,
+        margin_list=margin_list,
+        batch_size=batch_size)

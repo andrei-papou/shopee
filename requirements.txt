@@ -1,7 +1,11 @@
+albumentations==0.*
 numpy==1.*
 opencv-python==4.*
 pandas==1.*
+pytorch-lightning==1.*
 scikit-learn==0.*
+tensorboard==2.*
+timm==0.*
 torch==1.*
 torchvision==0.*
 tqdm==4.*

@@ -6,10 +6,55 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.metrics import f1_score
+from sklearn.neighbors import NearestNeighbors
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from shopee.datasets import PostingIdImageDataset, EmbeddingDataset
+from shopee.datasets import PostingIdImageDataset
+from shopee.module import Module
+
+
+def get_distance_tuple(
+        df: pd.DataFrame,
+        model: torch.nn.Module,
+        data_path: Path,
+        batch_size: int = 64,
+        num_workers: int = 4,
+        max_matches: int = 50,
+        progress_bar: bool = False) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    dataset = PostingIdImageDataset(df, data_path)
+    data_loader = DataLoader(dataset, batch_size=batch_size, pin_memory=True, num_workers=num_workers)
+
+    embedding_list: List[torch.Tensor] = []
+    posting_id_list: List[str] = []
+    with torch.no_grad():
+        it = tqdm(data_loader, desc='embedding dict generation') if progress_bar else data_loader
+        for pid_list, x in it:
+            embedding_list.append(model(x.cuda()).cpu())
+            posting_id_list.extend(pid_list)
+    embedding_matrix = torch.cat(embedding_list, dim=0).numpy()
+
+    knn = NearestNeighbors(n_neighbors=max_matches)
+    knn.fit(embedding_matrix)
+    distances, indices = knn.kneighbors(embedding_matrix)
+
+    return distances, indices, posting_id_list
+
+
+def get_pred_matches_dict(
+        distance_matrix: np.ndarray,
+        index_matrix: np.ndarray,
+        posting_id_list: List[str],
+        threshold: float,
+        progress_bar: bool = False) -> Dict[str, Set[str]]:
+    matches_dict: Dict[str, Set[str]] = {}
+    n_total = distance_matrix.shape[0]
+    it = range(n_total)
+    for i in (tqdm(it, total=n_total, desc='pred matches dict generation') if progress_bar else it):
+        local_match_index_arr: np.ndarray = np.where(distance_matrix[i] < threshold)[0]
+        global_match_index_list = index_matrix[i, local_match_index_arr].tolist()
+        matches_dict[posting_id_list[i]] = {posting_id_list[i] for i in global_match_index_list}
+    return matches_dict
 
 
 def get_embedding_dict(
@@ -30,7 +75,6 @@ def get_embedding_dict(
             embedding_tensor = model(x)
             for posting_id, embedding in zip(posting_id_list, embedding_tensor):
                 embedding_dict[posting_id] = embedding.cpu()
-        del model
     return embedding_dict
 
 
@@ -41,44 +85,6 @@ def get_true_matches_dict(df: pd.DataFrame, progress_bar: bool = False) -> Dict[
     for _, row in it:
         pid, lg = row['posting_id'], row['label_group']
         matches_dict[pid] = {p for p in df[df.label_group == lg].posting_id.unique().tolist()}
-    return matches_dict
-
-
-def get_pred_matches_dict(
-        embedding_dict: Dict[str, torch.Tensor],
-        threshold: float = 1.0,
-        progress_bar: bool = False,
-        batch_size: int = 1000,
-        num_workers: int = 4) -> Dict[str, Set[str]]:
-    matches_dict: Dict[str, Set[str]] = {}
-    outer_embedding_dataset = EmbeddingDataset(embedding_dict)
-    inner_embedding_dataset = EmbeddingDataset(embedding_dict)
-    outer_data_loader = DataLoader(
-        outer_embedding_dataset,
-        batch_size=batch_size,
-        pin_memory=True,
-        num_workers=num_workers)
-    inner_data_loader = DataLoader(
-        inner_embedding_dataset,
-        batch_size=batch_size,
-        pin_memory=True,
-        num_workers=num_workers)
-    with torch.no_grad():
-        it = tqdm(outer_data_loader, desc='pred matches dict generation') if progress_bar else outer_data_loader
-        for outer_pid_list, outer_emb_tensor in it:
-            outer_pid_match_dict: Dict[str, List[Tuple[str, float]]] = {pid: [] for pid in outer_pid_list}
-            outer_emb_tensor = outer_emb_tensor.unsqueeze(0).cuda()
-            for inner_pid_list, inner_emb_tensor in inner_data_loader:
-                inner_emb_tensor = inner_emb_tensor.unsqueeze(0).cuda()
-                dist_matrix = torch.cdist(outer_emb_tensor, inner_emb_tensor).squeeze(0)
-                same_indice_seq = (dist_matrix <= threshold).int().nonzero(as_tuple=False)
-                for same_idx_pair in same_indice_seq:
-                    oi, ii = same_idx_pair[0].item(), same_idx_pair[1].item()
-                    outer_pid_match_dict[outer_pid_list[oi]].append((inner_pid_list[ii], dist_matrix[oi, ii].item()))
-            matches_dict.update({
-                posting_id: {pid for (pid, _) in sorted(posting_id_match_list, key=lambda x: x[1])[:50]}
-                for posting_id, posting_id_match_list in outer_pid_match_dict.items()
-            })
     return matches_dict
 
 
@@ -102,3 +108,36 @@ def get_f1_mean_for_matches(
             f'n_true: {mean(true_match_count_list):.2f}, '
             f'n_pred: {mean(pred_match_count_list):.2f}')
     return mean(f1_val_list)
+
+
+def evaluate_generic_model(
+        model: torch.nn.Module,
+        index_root_path: str,
+        data_root_path: str,
+        margin_list: List[float],
+        batch_size: int = 64,):
+    model.eval()
+    eval_df = pd.read_csv(Path(index_root_path) / 'test-set.csv')
+    image_folder_path = Path(data_root_path) / 'train_images'
+
+    with torch.no_grad():
+        distance_matrix, index_matrix, posting_id_list = get_distance_tuple(
+            df=eval_df,
+            model=model,
+            data_path=image_folder_path,
+            batch_size=batch_size,
+            progress_bar=True)
+        true_matches_dict = get_true_matches_dict(
+            df=eval_df,
+            progress_bar=True)
+        for margin in margin_list:
+            pred_matches_dict = get_pred_matches_dict(
+                distance_matrix=distance_matrix,
+                index_matrix=index_matrix,
+                posting_id_list=posting_id_list,
+                threshold=margin,
+                progress_bar=True)
+            score = get_f1_mean_for_matches(
+                true_matches_dict=true_matches_dict,
+                pred_matches_dict=pred_matches_dict)
+            print(f'margin = {margin}, score = {score}')
