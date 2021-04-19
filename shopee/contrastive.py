@@ -28,7 +28,7 @@ class ContrastiveLoss(torch.nn.Module):
     def forward(self, x1: torch.Tensor, x2: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         euclidean_distance = torch_f.pairwise_distance(x1, x2)
         pos_error = torch.pow(euclidean_distance, 2)
-        neg_error = torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
+        neg_error = torch.pow(torch.clamp(self._margin - euclidean_distance, min=0.0), 2)
         return torch.mean(label * pos_error + (1 - label) * neg_error)
 
     def forward_triplet(self, t: Triplet) -> torch.Tensor:
