@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import pandas as pd
 import torch
+import torch.nn.functional as torch_f
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.loggers import LightningLoggerBase
@@ -10,10 +11,9 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from shopee.backbones import ResNet18, Backbone
+from shopee.backbones import EfficientNet, Backbone
 from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import RandomTripletImageDataset, PrecomputedTripletImageDataset
-from shopee.evaluation import evaluate_generic_model
 from shopee.metrics import get_triplet_accuracy_components
 from shopee.module import Module, StepResult
 from shopee.types import Triplet, TripletTuple, OptimizerConfig
@@ -25,31 +25,20 @@ class ContrastiveLoss(torch.nn.Module):
         super().__init__()
         self._margin = margin
 
-    def forward(self, x1: torch.Tensor, x2: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        :param x1: Tensor of shape (N, D) where N - batch size, D - embedding dimensionality.
-        Embeddings of the first batch.
-        :param x2: Tensor of shape (N, D) where N - batch size, D - embedding dimensionality.
-        Embeddings of the second batch.
-        :param y: Tensor of shape (N,) where N - batch size, with values either 0 or 1.
-        0 stands for the samples of the same class, 1 - different classes.
-        :return: Tensor of shape (N,) where each element is the contrastive loss value between
-        corresponding samples from x1 and x2.
-        """
-        dist = torch.cdist(x1.unsqueeze(1), x2.unsqueeze(1)).squeeze()
-        same_mask, diff_mask = y, (~y.bool()).int()  # type: (torch.Tensor, torch.Tensor)
-        ones = torch.ones(*dist.shape).cuda()
-        zeros = torch.zeros(*dist.shape).cuda()
-        dist_to_margin = torch.max(ones * self._margin - dist, zeros)
-
-        loss = dist * same_mask + dist_to_margin * diff_mask
-        return loss.mean()
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
+        euclidean_distance = torch_f.pairwise_distance(x1, x2)
+        pos_error = torch.pow(euclidean_distance, 2)
+        neg_error = torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
+        return torch.mean(label * pos_error + (1 - label) * neg_error)
 
     def forward_triplet(self, t: Triplet) -> torch.Tensor:
-        n = t.a.shape[0]
-        pos_loss = self(t.a, t.p, torch.ones(n).cuda())
-        neg_loss = self(t.a, t.n, torch.zeros(n).cuda())
-        return (pos_loss + neg_loss) / 2
+        return self(
+            torch.cat([t.a, t.a], dim=0),
+            torch.cat([t.p, t.n], dim=0),
+            torch.cat([
+                torch.ones((t.p.shape[0],)),
+                torch.zeros((t.n.shape[0],))
+            ]).cuda())
 
 
 class ContrastiveModel(Module):
@@ -57,13 +46,16 @@ class ContrastiveModel(Module):
     def __init__(self, backbone: Backbone, lr: float = 1e-3, momentum: float = 0.9, margin: float = 1.0):
         super().__init__()
         self.model = backbone
+        self.pooling = torch.nn.AdaptiveAvgPool2d(1)
         self.lr = lr
         self.momentum = momentum
         self.loss_fn = ContrastiveLoss(margin=margin)
         self.margin = margin
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        batch_size = x.shape[0]
+        x = self.model(x)
+        return self.pooling(x).view(batch_size, -1)
 
     def _forward_triplet(self, triplet: Triplet) -> Triplet:
         return Triplet.from_first_dim_split(self(triplet.join()))
@@ -131,7 +123,7 @@ def train_model(
         monitor='valid_accuracy',
         mode='max',
         patience=max_epochs_no_improvement)
-    backbone = ResNet18(pretrained=start_from_checkpoint_path is None)
+    backbone = EfficientNet(pretrained=start_from_checkpoint_path is None)
     model = ContrastiveModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin)
     trainer = Trainer(
         auto_lr_find=True,
@@ -151,18 +143,7 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def evaluate_model(
-        index_root_path: str,
-        data_root_path: str,
-        checkpoint_path: str,
-        margin_list: List[float],
-        batch_size: int = 64):
-    model = ContrastiveModel.load_from_checkpoint(
+def load_model(checkpoint_path: str) -> ContrastiveModel:
+    return ContrastiveModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=ResNet18(pretrained=False)).cuda()
-    return evaluate_generic_model(
-        model=model,
-        index_root_path=index_root_path,
-        data_root_path=data_root_path,
-        margin_list=margin_list,
-        batch_size=batch_size)
+        backbone=EfficientNet(pretrained=False)).cuda()

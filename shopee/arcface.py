@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional
 
 import albumentations as alb
 import pandas as pd
@@ -16,7 +16,6 @@ from torch.utils.data import DataLoader
 from shopee.backbones import Backbone, EfficientNet
 from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import ImageClsDataset
-from shopee.evaluation import evaluate_generic_model
 from shopee.module import Module, StepResult
 from shopee.types import OptimizerConfig
 
@@ -196,20 +195,8 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def evaluate_model(
-        index_root_path: str,
-        data_root_path: str,
-        checkpoint_path: str,
-        n_classes: int,
-        margin_list: List[float],
-        batch_size: int = 64):
-    model = ArcFaceModel.load_from_checkpoint(
+def load_model(checkpoint_path: str, n_classes: int) -> ArcFaceModel:
+    return ArcFaceModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
         backbone=EfficientNet(pretrained=False),
         n_classes=n_classes).cuda()
-    return evaluate_generic_model(
-        model=model,
-        index_root_path=index_root_path,
-        data_root_path=data_root_path,
-        margin_list=margin_list,
-        batch_size=batch_size)

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, Tuple
 
 import pandas as pd
 import torch
@@ -10,10 +10,9 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from shopee.backbones import Backbone, EfficientNet, ResNet18
+from shopee.backbones import Backbone, EfficientNet
 from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import RandomTripletImageDataset, PrecomputedTripletImageDataset
-from shopee.evaluation import evaluate_generic_model
 from shopee.module import Module, StepResult
 from shopee.types import Triplet, TripletTuple, OptimizerConfig
 
@@ -128,37 +127,7 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def evaluate_model(
-        index_root_path: str,
-        data_root_path: str,
-        checkpoint_path: str,
-        margin_list: List[float],
-        batch_size: int = 64):
-    model = TripletModel.load_from_checkpoint(
+def load_model(checkpoint_path: str) -> TripletModel:
+    return TripletModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
         backbone=EfficientNet(pretrained=False)).cuda()
-    return evaluate_generic_model(
-        model=model,
-        index_root_path=index_root_path,
-        data_root_path=data_root_path,
-        margin_list=margin_list,
-        batch_size=batch_size)
-
-
-def evaluate_model_pth(
-        index_root_path: str,
-        data_root_path: str,
-        checkpoint_path: str,
-        margin_list: List[float],
-        batch_size: int = 64):
-    model_state_dict = torch.load(checkpoint_path)
-    if 'model_state_dict' in model_state_dict:
-        model_state_dict = model_state_dict['model_state_dict']
-    model = ResNet18(pretrained=False).cuda()
-    model.load_state_dict(model_state_dict)
-    return evaluate_generic_model(
-        model=model,
-        index_root_path=index_root_path,
-        data_root_path=data_root_path,
-        margin_list=margin_list,
-        batch_size=batch_size)
