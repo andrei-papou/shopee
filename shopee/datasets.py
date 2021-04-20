@@ -63,6 +63,32 @@ class RandomTripletImageDataset(Dataset):
             self._augmenter.augment(load_image(self._image_folder_path / n_img_name)))
 
 
+class OnlineTripletImageDataset(Dataset):
+    def __init__(
+            self,
+            df: pd.DataFrame,
+            image_folder_path: Path,
+            augmentation_list: Optional[List[alb.BasicTransform]] = None):
+        self._df = df
+        self._image_folder_path = image_folder_path
+        self._augmenter = ImageAugmenter(augmentation_list)
+
+    def __len__(self) -> int:
+        return len(self._df)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        row = self._df.iloc[idx]
+        a_img_name, a_lg_id = row['image'], row['label_group']
+        p_img_name = self._df \
+            .loc[(self._df.label_group == a_lg_id) & (self._df.image != a_img_name)] \
+            .sample(n=1).image.item()
+        n_img_name = self._df.loc[self._df.label_group != a_lg_id].sample(n=1).image.item()
+        return (
+            self._augmenter.augment(load_image(self._image_folder_path / a_img_name)),
+            self._augmenter.augment(load_image(self._image_folder_path / p_img_name)),
+            self._augmenter.augment(load_image(self._image_folder_path / n_img_name)))
+
+
 class ImageClsDataset(Dataset):
 
     def __init__(
@@ -148,3 +174,22 @@ class PostingIdImageDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor]:
         row = self._df.iloc[idx]
         return row['posting_id'], self._augmenter.augment(load_image(self._image_folder_path / row['image']))
+
+
+class ImageLabelGroupDataset(Dataset):
+
+    def __init__(
+            self,
+            df: pd.DataFrame,
+            image_folder_path: Path,
+            augmentation_list: Optional[List[alb.BasicTransform]] = None):
+        self._df = df
+        self._image_folder_path = image_folder_path
+        self._augmenter = ImageAugmenter(augmentation_list)
+
+    def __len__(self) -> int:
+        return len(self._df)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
+        row = self._df.iloc[idx]
+        return self._augmenter.augment(load_image(self._image_folder_path / row['image'])), row['label_group']

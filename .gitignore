@@ -6,3 +6,5 @@ tensorboard_logs
 **/__pycache__
 logs
 checkpoints
+embeddings
+scores.csv
