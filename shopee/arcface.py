@@ -183,7 +183,9 @@ def train_model(
         backbone=backbone,
         n_classes=num_classes,
         lr=lr,
-        margin=margin)
+        margin=margin,
+        monitor_metric=monitor_metric,
+        monitor_mode=monitor_mode)
     trainer = Trainer(
         auto_lr_find=True,
         gpus=1,
