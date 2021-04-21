@@ -122,7 +122,7 @@ class ArcFaceModel(Module):
         return {
             'optimizer': optimizer,
             'lr_scheduler': lr_scheduler,
-            'monitor': self._monitor,
+            'monitor': self._monitor_metric,
         }
 
 
