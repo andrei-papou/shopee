@@ -110,7 +110,7 @@ def train_model(
         accumulate_grad_batches: int = 1,
         num_train_batches: int = 6500,
         start_from_checkpoint_path: Optional[str] = None,
-        backbone_version: str = 'b0'):
+        backbone_version: str = 'b1'):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -168,4 +168,4 @@ def train_model(
 def load_model(checkpoint_path: str) -> TripletModel:
     return TripletModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=EfficientNet(pretrained=False, version='b0')).cuda()
+        backbone=EfficientNet(pretrained=False, version='b1')).cuda()

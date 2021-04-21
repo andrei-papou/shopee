@@ -130,7 +130,8 @@ def evaluate_model(
         index_root_path: str,
         data_root_path: str,
         margin_list: List[float],
-        batch_size: int = 64,):
+        batch_size: int = 64,
+        use_phash: bool = True):
     model.eval()
     eval_df = pd.read_csv(Path(index_root_path) / 'test-set.csv')
     image_folder_path = Path(data_root_path) / 'train_images'
@@ -142,32 +143,19 @@ def evaluate_model(
             data_path=image_folder_path,
             batch_size=batch_size,
             progress_bar=True)
-    distance_matrix, index_matrix = get_distance_tuple(embedding_matrix=embedding_matrix)
-    true_matches_dict = get_true_matches_dict(
-        df=eval_df,
-        progress_bar=True)
-    for margin in margin_list:
-        distance_pred_matches_dict = get_distance_pred_matches_dict(
-            distance_matrix=distance_matrix,
-            index_matrix=index_matrix,
-            posting_id_list=posting_id_list,
-            threshold=margin,
-            progress_bar=True)
-        phash_pred_matches_dict = get_phash_pred_matches_dict(df=eval_df, progress_bar=True)
-        pred_matches_dict = join_matches_dict_list([
-            distance_pred_matches_dict,
-            phash_pred_matches_dict,
-        ])
-        score = get_f1_mean_for_matches(
-            true_matches_dict=true_matches_dict,
-            pred_matches_dict=pred_matches_dict)
-        print(f'margin = {margin}, score = {score}')
+    evaluate_embeddings(
+        embedding_tuple=(embedding_matrix, posting_id_list),
+        index_root_path=index_root_path,
+        margin_list=margin_list,
+        use_phash=use_phash
+    )
 
 
 def evaluate_embeddings(
         embedding_tuple: Optional[Tuple[np.ndarray, List[str]]],
         index_root_path: str,
-        margin_list: List[float]):
+        margin_list: List[float],
+        use_phash: bool = True):
     eval_df = pd.read_csv(Path(index_root_path) / 'test-set.csv')
 
     embedding_matrix, posting_id_list = embedding_tuple
@@ -175,6 +163,7 @@ def evaluate_embeddings(
     true_matches_dict = get_true_matches_dict(
         df=eval_df,
         progress_bar=True)
+    phash_pred_matches_dict = get_phash_pred_matches_dict(df=eval_df, progress_bar=True) if use_phash else None
     for margin in margin_list:
         distance_pred_matches_dict = get_distance_pred_matches_dict(
             distance_matrix=distance_matrix,
@@ -182,11 +171,10 @@ def evaluate_embeddings(
             posting_id_list=posting_id_list,
             threshold=margin,
             progress_bar=True)
-        phash_pred_matches_dict = get_phash_pred_matches_dict(df=eval_df, progress_bar=True)
         pred_matches_dict = join_matches_dict_list([
             distance_pred_matches_dict,
             phash_pred_matches_dict,
-        ])
+        ]) if phash_pred_matches_dict is not None else distance_pred_matches_dict
         score = get_f1_mean_for_matches(
             true_matches_dict=true_matches_dict,
             pred_matches_dict=pred_matches_dict)

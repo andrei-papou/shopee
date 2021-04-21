@@ -136,6 +136,7 @@ def train_model(
         num_workers: int = 2,
         num_classes: int = 256,
         start_from_checkpoint_path: Optional[str] = None,
+        backbone_version: str = 'b3',
         accumulate_grad_batches: int = 1):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
@@ -171,7 +172,7 @@ def train_model(
         monitor='valid_accuracy',
         mode='max',
         patience=max_epochs_no_improvement)
-    backbone = EfficientNet(pretrained=start_from_checkpoint_path is None)
+    backbone = EfficientNet(pretrained=start_from_checkpoint_path is None, version=backbone_version)
     model = ArcFaceModel(
         backbone=backbone,
         n_classes=num_classes,
@@ -195,8 +196,8 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str, n_classes: int) -> ArcFaceModel:
+def load_model(checkpoint_path: str, n_classes: int, backbone_version: str = 'b3') -> ArcFaceModel:
     return ArcFaceModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=EfficientNet(pretrained=False),
+        backbone=EfficientNet(pretrained=False, version=backbone_version),
         n_classes=n_classes).cuda()

@@ -21,12 +21,12 @@ class _TripletOnlineIter:
     def __next__(self) -> int:
         if self._queue:
             return self._queue.pop()
-        self._num_batches_delivered += 1
         if self._num_batches_delivered >= self._num_batches_total:
             raise StopIteration()
         lg1, lg2 = random.sample(self._candidate_label_list, 2)
         self._enqueue_label_group(lg=lg1, n=self._batch_size // 2)
         self._enqueue_label_group(lg=lg2, n=self._batch_size - self._batch_size // 2)
+        self._num_batches_delivered += 1
         return self._queue.pop()
 
 
