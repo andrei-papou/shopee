@@ -79,7 +79,9 @@ class ArcFaceModel(Module):
             lr: float = 1e-3,
             scale: float = 30.0,
             margin: float = 0.50,
-            ls_eps: float = 0.0):
+            ls_eps: float = 0.0,
+            monitor_metric: str = 'valid_loss',
+            monitor_mode: str = 'min'):
         super().__init__()
 
         self.backbone = backbone
@@ -93,6 +95,8 @@ class ArcFaceModel(Module):
             ls_eps=ls_eps)
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.lr = lr
+        self._monitor_metric = monitor_metric
+        self._monitor_mode = monitor_mode
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
@@ -114,11 +118,11 @@ class ArcFaceModel(Module):
 
     def configure_optimizers(self) -> OptimizerConfig:
         optimizer = Adam(self.parameters(), lr=self.lr)
-        lr_scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='max', factor=0.1, patience=3)
+        lr_scheduler = ReduceLROnPlateau(optimizer=optimizer, mode=self._monitor_mode, factor=0.1, patience=3)
         return {
             'optimizer': optimizer,
             'lr_scheduler': lr_scheduler,
-            'monitor': 'valid_accuracy',
+            'monitor': self._monitor,
         }
 
 
@@ -137,7 +141,9 @@ def train_model(
         num_classes: int = 256,
         start_from_checkpoint_path: Optional[str] = None,
         backbone_version: str = 'b3',
-        accumulate_grad_batches: int = 1):
+        accumulate_grad_batches: int = 1,
+        monitor_metric: str = 'valid_loss',
+        monitor_mode: str = 'min'):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -169,8 +175,8 @@ def train_model(
 
     checkpoint_callback = create_checkpoint_callback(checkpoint_file_path=checkpoint_file_path)
     early_stopping_callback = EarlyStopping(
-        monitor='valid_accuracy',
-        mode='max',
+        monitor=monitor_metric,
+        mode=monitor_mode,
         patience=max_epochs_no_improvement)
     backbone = EfficientNet(pretrained=start_from_checkpoint_path is None, version=backbone_version)
     model = ArcFaceModel(

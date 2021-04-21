@@ -131,9 +131,10 @@ def evaluate_model(
         data_root_path: str,
         margin_list: List[float],
         batch_size: int = 64,
-        use_phash: bool = True):
+        use_phash: bool = True,
+        test_set_file_name: str = 'test-set.csv'):
     model.eval()
-    eval_df = pd.read_csv(Path(index_root_path) / 'test-set.csv')
+    eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
     image_folder_path = Path(data_root_path) / 'train_images'
 
     with torch.no_grad():
@@ -155,8 +156,9 @@ def evaluate_embeddings(
         embedding_tuple: Optional[Tuple[np.ndarray, List[str]]],
         index_root_path: str,
         margin_list: List[float],
-        use_phash: bool = True):
-    eval_df = pd.read_csv(Path(index_root_path) / 'test-set.csv')
+        use_phash: bool = True,
+        test_set_file_name: str = 'test-set.csv'):
+    eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
 
     embedding_matrix, posting_id_list = embedding_tuple
     distance_matrix, index_matrix = get_distance_tuple(embedding_matrix=embedding_matrix)
