@@ -173,7 +173,10 @@ def train_model(
         num_workers=num_workers,
         pin_memory=True)
 
-    checkpoint_callback = create_checkpoint_callback(checkpoint_file_path=checkpoint_file_path)
+    checkpoint_callback = create_checkpoint_callback(
+        checkpoint_file_path=checkpoint_file_path,
+        monitor=monitor_metric,
+        mode=monitor_mode)
     early_stopping_callback = EarlyStopping(
         monitor=monitor_metric,
         mode=monitor_mode,
