@@ -143,7 +143,8 @@ def train_model(
         backbone_version: str = 'b3',
         accumulate_grad_batches: int = 1,
         monitor_metric: str = 'valid_loss',
-        monitor_mode: str = 'min'):
+        monitor_mode: str = 'min',
+        check_val_every_n_epoch: int = 1):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -195,6 +196,7 @@ def train_model(
         auto_select_gpus=True,
         max_epochs=num_epochs,
         logger=logger,
+        check_val_every_n_epoch=check_val_every_n_epoch,
         accumulate_grad_batches=accumulate_grad_batches,
         resume_from_checkpoint=start_from_checkpoint_path,
         callbacks=[

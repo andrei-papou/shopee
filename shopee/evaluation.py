@@ -13,6 +13,8 @@ from tqdm import tqdm
 
 from shopee.datasets import PostingIdImageDataset
 
+DEFAULT_DISTANCE_METRIC = 'minkowski'
+
 
 def get_embedding_tuple(
         df: pd.DataFrame,
@@ -76,8 +78,11 @@ def get_f1_mean_for_matches(
     return mean(f1_val_list)
 
 
-def get_distance_tuple(embedding_matrix: np.ndarray, max_matches: int = 50) -> Tuple[np.ndarray, np.ndarray]:
-    knn = NearestNeighbors(n_neighbors=max_matches)
+def get_distance_tuple(
+        embedding_matrix: np.ndarray,
+        max_matches: int = 50,
+        distance_metric: str = DEFAULT_DISTANCE_METRIC) -> Tuple[np.ndarray, np.ndarray]:
+    knn = NearestNeighbors(n_neighbors=max_matches, metric=distance_metric)
     knn.fit(embedding_matrix)
     distances, indices = knn.kneighbors(embedding_matrix)
 
@@ -132,7 +137,8 @@ def evaluate_model(
         margin_list: List[float],
         batch_size: int = 64,
         use_phash: bool = True,
-        test_set_file_name: str = 'test-set.csv'):
+        test_set_file_name: str = 'test-set.csv',
+        distance_metric: str = DEFAULT_DISTANCE_METRIC):
     model.eval()
     eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
     image_folder_path = Path(data_root_path) / 'train_images'
@@ -148,7 +154,8 @@ def evaluate_model(
         embedding_tuple=(embedding_matrix, posting_id_list),
         index_root_path=index_root_path,
         margin_list=margin_list,
-        use_phash=use_phash
+        use_phash=use_phash,
+        distance_metric=distance_metric,
     )
 
 
@@ -157,11 +164,14 @@ def evaluate_embeddings(
         index_root_path: str,
         margin_list: List[float],
         use_phash: bool = True,
-        test_set_file_name: str = 'test-set.csv'):
+        test_set_file_name: str = 'test-set.csv',
+        distance_metric: str = DEFAULT_DISTANCE_METRIC):
     eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
 
     embedding_matrix, posting_id_list = embedding_tuple
-    distance_matrix, index_matrix = get_distance_tuple(embedding_matrix=embedding_matrix)
+    distance_matrix, index_matrix = get_distance_tuple(
+        embedding_matrix=embedding_matrix,
+        distance_metric=distance_metric)
     true_matches_dict = get_true_matches_dict(
         df=eval_df,
         progress_bar=True)
