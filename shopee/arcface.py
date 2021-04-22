@@ -139,6 +139,8 @@ def train_model(
         valid_batch_size: int = 64,
         num_workers: int = 2,
         num_classes: int = 256,
+        train_index_file_name: Optional[str] = None,
+        test_index_file_name: Optional[str] = None,
         start_from_checkpoint_path: Optional[str] = None,
         backbone_version: str = 'b3',
         accumulate_grad_batches: int = 1,
@@ -149,8 +151,10 @@ def train_model(
     image_folder_path = data_root_path / 'train_images'
 
     index_root_path = Path(index_root_path)
-    train_df = pd.read_csv(index_root_path / f'train_cls_{num_classes}.csv')
-    test_df = pd.read_csv(index_root_path / f'test_cls_{num_classes}.csv')
+    train_df = pd.read_csv(index_root_path / (
+        train_index_file_name if train_index_file_name is not None else f'train_cls_{num_classes}.csv'))
+    test_df = pd.read_csv(index_root_path / (
+        test_index_file_name if test_index_file_name is not None else f'test_cls_{num_classes}.csv'))
 
     train_dataset = ImageClsDataset(
         df=train_df,
