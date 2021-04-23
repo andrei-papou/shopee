@@ -138,7 +138,6 @@ def train_model(
         train_batch_size: int = 64,
         valid_batch_size: int = 64,
         num_workers: int = 2,
-        num_classes: int = 256,
         train_index_file_name: Optional[str] = None,
         test_index_file_name: Optional[str] = None,
         start_from_checkpoint_path: Optional[str] = None,
@@ -151,21 +150,21 @@ def train_model(
     image_folder_path = data_root_path / 'train_images'
 
     index_root_path = Path(index_root_path)
-    train_df = pd.read_csv(index_root_path / (
-        train_index_file_name if train_index_file_name is not None else f'train_cls_{num_classes}.csv'))
-    test_df = pd.read_csv(index_root_path / (
-        test_index_file_name if test_index_file_name is not None else f'test_cls_{num_classes}.csv'))
+    train_df = pd.read_csv(index_root_path / train_index_file_name)
+    test_df = pd.read_csv(index_root_path / test_index_file_name)
+    num_classes = len(train_df.cls.unique().tolist())
 
     train_dataset = ImageClsDataset(
         df=train_df,
         image_folder_path=image_folder_path,
+        img_size=(512, 512),
         augmentation_list=[
             alb.HorizontalFlip(p=0.5),
             alb.VerticalFlip(p=0.5),
             alb.Rotate(limit=120, p=0.8),
             alb.RandomBrightness(limit=(0.09, 0.6), p=0.5),
         ])
-    valid_dataset = ImageClsDataset(df=test_df, image_folder_path=image_folder_path)
+    valid_dataset = ImageClsDataset(df=test_df, image_folder_path=image_folder_path, img_size=(512, 512))
     train_data_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,

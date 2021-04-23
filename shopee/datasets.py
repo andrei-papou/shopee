@@ -11,22 +11,18 @@ import torch
 from albumentations.pytorch.transforms import ToTensorV2
 from torch.utils.data import Dataset
 
-_AUGMENTATIONS_RESIZE: List[alb.BasicTransform] = [
-    alb.Resize(224, 224, always_apply=True),
-]
-_AUGMENTATIONS_NORMALIZE_TO_TENSOR: List[alb.BasicTransform] = [
-    alb.Normalize(),
-    ToTensorV2(),
-]
-
 
 class ImageAugmenter:
 
-    def __init__(self, augmentation_list: Optional[List[alb.BasicTransform]] = None):
+    def __init__(
+            self,
+            augmentation_list: Optional[List[alb.BasicTransform]] = None,
+            img_size: Tuple[int, int] = (224, 224)):
+        # noinspection PyTypeChecker
         self._augmentation = alb.Compose(
-            _AUGMENTATIONS_RESIZE +
+            [alb.Resize(*img_size, always_apply=True)] +
             (augmentation_list if augmentation_list is not None else []) +
-            _AUGMENTATIONS_NORMALIZE_TO_TENSOR)
+            [alb.Normalize(), ToTensorV2()])
 
     def augment(self, image: np.ndarray) -> torch.Tensor:
         return self._augmentation(image=image)['image']
@@ -95,10 +91,11 @@ class ImageClsDataset(Dataset):
             self,
             df: pd.DataFrame,
             image_folder_path: Path,
-            augmentation_list: Optional[List[alb.BasicTransform]] = None):
+            augmentation_list: Optional[List[alb.BasicTransform]] = None,
+            img_size: Tuple[int, int] = (224, 224)):
         self._df = df
         self._image_folder_path = image_folder_path
-        self._augmenter = ImageAugmenter(augmentation_list)
+        self._augmenter = ImageAugmenter(augmentation_list, img_size=img_size)
 
     def __len__(self) -> int:
         return len(self._df)
