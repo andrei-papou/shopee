@@ -157,14 +157,13 @@ def train_model(
     train_dataset = ImageClsDataset(
         df=train_df,
         image_folder_path=image_folder_path,
-        img_size=(512, 512),
         augmentation_list=[
             alb.HorizontalFlip(p=0.5),
             alb.VerticalFlip(p=0.5),
             alb.Rotate(limit=120, p=0.8),
             alb.RandomBrightness(limit=(0.09, 0.6), p=0.5),
         ])
-    valid_dataset = ImageClsDataset(df=test_df, image_folder_path=image_folder_path, img_size=(512, 512))
+    valid_dataset = ImageClsDataset(df=test_df, image_folder_path=image_folder_path)
     train_data_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,
