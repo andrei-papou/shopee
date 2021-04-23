@@ -1,7 +1,8 @@
 import re
-from typing import FrozenSet, Optional, Iterable
+from typing import FrozenSet, Optional, Tuple, List, Union
 
 import numpy as np
+import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 DIGIT_PATTERN = '(\d+(\.\d*)?)'
@@ -99,9 +100,14 @@ def preprocess_title(title: str) -> str:
     return ' '.join(new_title_part_list)
 
 
-def get_embedding_matrix(
-        corpus: Iterable[str],
-        stop_words: Optional[FrozenSet[str]] = None,
-        max_features: int = 25_000) -> np.ndarray:
-    model = TfidfVectorizer(stop_words=stop_words, max_features=max_features)
-    return model.fit_transform(raw_documents=corpus)
+def get_embedding_tuple(
+        df: pd.DataFrame,
+        stop_words: Optional[Union[str, FrozenSet[str]]] = None,
+        preprocess: bool = False,
+        max_features: int = 25_000,
+        token_pattern: str = r'(?u)\b\w\w+\b') -> Tuple[np.ndarray, List[str]]:
+    title_list, posting_id_list = df.title.tolist(), df.posting_id.tolist()
+    if preprocess:
+        title_list = [preprocess_title(title) for title in title_list]
+    model = TfidfVectorizer(stop_words=stop_words, max_features=max_features, token_pattern=token_pattern)
+    return model.fit_transform(raw_documents=title_list), posting_id_list

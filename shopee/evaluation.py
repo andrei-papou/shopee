@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from shopee.datasets import PostingIdImageDataset
+from shopee.threshold import ThresholdFinder
 
 DEFAULT_DISTANCE_METRIC = 'minkowski'
 
@@ -134,7 +135,7 @@ def evaluate_model(
         model: torch.nn.Module,
         index_root_path: str,
         data_root_path: str,
-        margin_list: List[float],
+        threshold_finder: ThresholdFinder,
         batch_size: int = 64,
         use_phash: bool = True,
         test_set_file_name: str = 'test-set.csv',
@@ -153,7 +154,7 @@ def evaluate_model(
     evaluate_embeddings(
         embedding_tuple=(embedding_matrix, posting_id_list),
         index_root_path=index_root_path,
-        margin_list=margin_list,
+        threshold_finder=threshold_finder,
         use_phash=use_phash,
         distance_metric=distance_metric,
     )
@@ -162,7 +163,7 @@ def evaluate_model(
 def evaluate_embeddings(
         embedding_tuple: Optional[Tuple[np.ndarray, List[str]]],
         index_root_path: str,
-        margin_list: List[float],
+        threshold_finder: ThresholdFinder,
         use_phash: bool = True,
         test_set_file_name: str = 'test-set.csv',
         distance_metric: str = DEFAULT_DISTANCE_METRIC):
@@ -176,18 +177,25 @@ def evaluate_embeddings(
         df=eval_df,
         progress_bar=True)
     phash_pred_matches_dict = get_phash_pred_matches_dict(df=eval_df, progress_bar=True) if use_phash else None
-    for margin in margin_list:
+
+    threshold = threshold_finder.threshold
+    pred_matches_dict = {}
+    while threshold is not None:
         distance_pred_matches_dict = get_distance_pred_matches_dict(
             distance_matrix=distance_matrix,
             index_matrix=index_matrix,
             posting_id_list=posting_id_list,
-            threshold=margin,
+            threshold=threshold,
             progress_bar=True)
         pred_matches_dict = join_matches_dict_list([
             distance_pred_matches_dict,
             phash_pred_matches_dict,
         ]) if phash_pred_matches_dict is not None else distance_pred_matches_dict
-        score = get_f1_mean_for_matches(
-            true_matches_dict=true_matches_dict,
-            pred_matches_dict=pred_matches_dict)
-        print(f'margin = {margin}, score = {score}')
+        print(len(pred_matches_dict), len(eval_df))
+        mean_num_matches = mean([len(m_set) for m_set in pred_matches_dict.values()])
+        print(f'threshold = {threshold}, mean_num_matches = {mean_num_matches}')
+        threshold = threshold_finder.get_next_threshold(mean_num_matches)
+    score = get_f1_mean_for_matches(
+        true_matches_dict=true_matches_dict,
+        pred_matches_dict=pred_matches_dict)
+    print(f'threshold = {threshold}, score = {score}')
