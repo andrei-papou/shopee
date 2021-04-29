@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import albumentations as alb
 import pandas as pd
 import torch
+import torch.nn.functional as torch_f
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.loggers import LightningLoggerBase
@@ -11,7 +12,7 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from shopee.backbones import Backbone, EfficientNet, ResNet18
+from shopee.backbones import Backbone, EfficientNet
 from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import PrecomputedTripletImageDataset, ImageLabelGroupDataset
 from shopee.module import Module, StepResult
@@ -51,7 +52,12 @@ def get_triplet_accuracy_components(t: Triplet, margin: float) -> Tuple[int, int
 
 class TripletModel(Module):
 
-    def __init__(self, backbone: Backbone, lr: float = 1e-3, momentum: float = 0.9, margin: float = 1.0):
+    def __init__(
+            self,
+            backbone: Backbone,
+            lr: float = 1e-3,
+            momentum: float = 0.9,
+            margin: float = 0.5):
         super().__init__()
         self.backbone = backbone
         self.lr = lr
@@ -64,7 +70,7 @@ class TripletModel(Module):
         batch_size = x.shape[0]
         x = self.backbone(x)
         x = self.pooling(x)
-        return x.view(batch_size, -1)
+        return torch_f.normalize(x.view(batch_size, -1), dim=1)
 
     def _forward_triplet(self, triplet: Triplet) -> Triplet:
         return Triplet.from_first_dim_split(self(triplet.join()))
@@ -102,7 +108,7 @@ def train_model(
         lr: float = 1e-3,
         momentum: float = 0.9,
         num_epochs: int = 25,
-        margin: float = 1.0,
+        margin: float = 0.5,
         max_epochs_no_improvement: int = 7,
         train_batch_size: int = 64,
         valid_batch_size: int = 64,
@@ -110,24 +116,31 @@ def train_model(
         accumulate_grad_batches: int = 1,
         num_train_batches: int = 6500,
         start_from_checkpoint_path: Optional[str] = None,
+        train_index_file_name: Optional[str] = None,
+        test_index_file_name: Optional[str] = None,
+        img_size: Tuple[int, int] = (224, 224),
         backbone_version: str = 'b1'):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
     index_root_path = Path(index_root_path)
-    train_df = pd.read_csv(index_root_path / 'train-set.csv')
-    test_pair_df = pd.read_csv(index_root_path / 'test_triplets.csv')
+    train_df = pd.read_csv(index_root_path / (train_index_file_name or 'train-set.csv'))
+    test_pair_df = pd.read_csv(index_root_path / (test_index_file_name or 'test_triplets.csv'))
 
     train_dataset = ImageLabelGroupDataset(
         df=train_df,
         image_folder_path=image_folder_path,
+        img_size=img_size,
         augmentation_list=[
             alb.HorizontalFlip(p=0.5),
             alb.VerticalFlip(p=0.5),
             alb.Rotate(limit=120, p=0.8),
             alb.RandomBrightness(limit=(0.09, 0.6), p=0.5),
         ])
-    valid_dataset = PrecomputedTripletImageDataset(df=test_pair_df, image_folder_path=image_folder_path)
+    valid_dataset = PrecomputedTripletImageDataset(
+        df=test_pair_df,
+        image_folder_path=image_folder_path,
+        img_size=img_size)
     train_data_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,
@@ -165,7 +178,7 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str) -> TripletModel:
+def load_model(checkpoint_path: str, backbone_version: str = 'b1') -> TripletModel:
     return TripletModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=EfficientNet(pretrained=False, version='b1')).cuda()
+        backbone=EfficientNet(pretrained=False, version=backbone_version)).cuda()

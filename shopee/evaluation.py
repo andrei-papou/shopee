@@ -1,11 +1,12 @@
 import pickle
 from pathlib import Path
 from statistics import mean
-from typing import Dict, Set, Tuple, List, Optional
+from typing import Dict, Set, Tuple, List, Union
 
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import f1_score
 from sklearn.neighbors import NearestNeighbors
 from torch.utils.data import DataLoader
@@ -135,7 +136,7 @@ def evaluate_model(
         model: torch.nn.Module,
         index_root_path: str,
         data_root_path: str,
-        threshold_finder: ThresholdFinder,
+        threshold: Union[ThresholdFinder, float],
         batch_size: int = 64,
         use_phash: bool = True,
         test_set_file_name: str = 'test-set.csv',
@@ -154,16 +155,16 @@ def evaluate_model(
     evaluate_embeddings(
         embedding_tuple=(embedding_matrix, posting_id_list),
         index_root_path=index_root_path,
-        threshold_finder=threshold_finder,
+        threshold=threshold,
         use_phash=use_phash,
         distance_metric=distance_metric,
     )
 
 
 def evaluate_embeddings(
-        embedding_tuple: Optional[Tuple[np.ndarray, List[str]]],
+        embedding_tuple: Tuple[np.ndarray, List[str]],
         index_root_path: str,
-        threshold_finder: ThresholdFinder,
+        threshold: Union[ThresholdFinder, float],
         use_phash: bool = True,
         test_set_file_name: str = 'test-set.csv',
         distance_metric: str = DEFAULT_DISTANCE_METRIC):
@@ -178,9 +179,26 @@ def evaluate_embeddings(
         progress_bar=True)
     phash_pred_matches_dict = get_phash_pred_matches_dict(df=eval_df, progress_bar=True) if use_phash else None
 
-    threshold = threshold_finder.threshold
-    pred_matches_dict = {}
-    while threshold is not None:
+    if isinstance(threshold, ThresholdFinder):
+        threshold_finder = threshold
+        threshold = threshold_finder.threshold
+        pred_matches_dict = {}
+        while threshold is not None:
+            distance_pred_matches_dict = get_distance_pred_matches_dict(
+                distance_matrix=distance_matrix,
+                index_matrix=index_matrix,
+                posting_id_list=posting_id_list,
+                threshold=threshold,
+                progress_bar=True)
+            pred_matches_dict = join_matches_dict_list([
+                distance_pred_matches_dict,
+                phash_pred_matches_dict,
+            ]) if phash_pred_matches_dict is not None else distance_pred_matches_dict
+            print(len(pred_matches_dict), len(eval_df))
+            mean_num_matches = mean([len(m_set) for m_set in pred_matches_dict.values()])
+            print(f'threshold = {threshold}, mean_num_matches = {mean_num_matches}')
+            threshold = threshold_finder.get_next_threshold(mean_num_matches)
+    elif isinstance(threshold, float):
         distance_pred_matches_dict = get_distance_pred_matches_dict(
             distance_matrix=distance_matrix,
             index_matrix=index_matrix,
@@ -191,10 +209,48 @@ def evaluate_embeddings(
             distance_pred_matches_dict,
             phash_pred_matches_dict,
         ]) if phash_pred_matches_dict is not None else distance_pred_matches_dict
-        print(len(pred_matches_dict), len(eval_df))
-        mean_num_matches = mean([len(m_set) for m_set in pred_matches_dict.values()])
-        print(f'threshold = {threshold}, mean_num_matches = {mean_num_matches}')
-        threshold = threshold_finder.get_next_threshold(mean_num_matches)
+    else:
+        raise TypeError(f'Invalid threshold type: {type(threshold)}.')
+    score = get_f1_mean_for_matches(
+        true_matches_dict=true_matches_dict,
+        pred_matches_dict=pred_matches_dict)
+    print(f'threshold = {threshold}, score = {score}')
+
+
+def get_matches_dict_clustering(
+        embedding_tuple: Tuple[np.ndarray, List[str]],
+        threshold: Union[ThresholdFinder, float]):
+    embedding_matrix, posting_id_list = embedding_tuple
+    ac = AgglomerativeClustering(distance_threshold=threshold, n_clusters=None, linkage='single')
+    labels = ac.fit_predict(embedding_matrix)
+
+    pred_matches_dict = {}
+    posting_id_series = pd.Series(posting_id_list)
+    for pid, label in zip(posting_id_list, labels.tolist()):
+        pred_matches_dict[pid] = set(posting_id_series[labels == label].tolist())
+
+    return pred_matches_dict
+
+
+def evaluate_embeddings_clustering(
+        embedding_tuple: Tuple[np.ndarray, List[str]],
+        index_root_path: str,
+        threshold: Union[ThresholdFinder, float],
+        test_set_file_name: str = 'test-set.csv'):
+    eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
+
+    embedding_matrix, posting_id_list = embedding_tuple
+    ac = AgglomerativeClustering(distance_threshold=threshold, n_clusters=None, linkage='single')
+    labels = ac.fit_predict(embedding_matrix)
+
+    pred_matches_dict = {}
+    posting_id_series = pd.Series(posting_id_list)
+    for pid, label in zip(posting_id_list, labels.tolist()):
+        pred_matches_dict[pid] = set(posting_id_series[labels == label].tolist())
+
+    true_matches_dict = get_true_matches_dict(
+        df=eval_df,
+        progress_bar=True)
     score = get_f1_mean_for_matches(
         true_matches_dict=true_matches_dict,
         pred_matches_dict=pred_matches_dict)
