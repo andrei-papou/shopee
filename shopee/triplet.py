@@ -20,17 +20,56 @@ from shopee.sampler import TripletOnlineSampler
 from shopee.types import Triplet, TripletTuple, OptimizerConfig
 
 
+class TripletDistance(torch.nn.Module):
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError()
+
+    def get_distance_matrix(self, emb: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError()
+
+
+class EuclideanTripletDistance(TripletDistance):
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        return torch_f.pairwise_distance(x1, x2)
+
+    def get_distance_matrix(self, emb: torch.Tensor) -> torch.Tensor:
+        n, _ = emb.shape
+        norm_sq = torch.sum(emb ** 2, dim=1, keepdim=True).repeat(1, n)
+        dot_prod = torch.matmul(emb, emb.T)
+        return norm_sq - 2 * dot_prod + norm_sq.T
+
+
+class CosineTripletDistance(TripletDistance):
+
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        return 1.0 - torch_f.cosine_similarity(x1, x2)
+
+    def get_distance_matrix(self, emb: torch.Tensor) -> torch.Tensor:
+        emb = torch_f.normalize(emb, dim=1)
+        return 1.0 - torch.matmul(emb, emb.T)
+
+
+def get_triplet_distance(distance: str) -> TripletDistance:
+    if distance == 'euclidean':
+        return EuclideanTripletDistance()
+    elif distance == 'cosine':
+        return CosineTripletDistance()
+    raise ValueError(f'Unknown distance: {distance}.')
+
+
 def get_label_similarity_matrix(labels: torch.Tensor) -> torch.Tensor:
     rows = torch.unsqueeze(labels, dim=1).repeat(1, len(labels))
     cols = torch.unsqueeze(labels, dim=0).repeat(len(labels), 1)
     return torch.eq(rows, cols).int()
 
 
-def get_hardest_triplet(embed_tensor: torch.Tensor, label_similarity_matrix: torch.Tensor) -> Triplet:
-    n, _ = embed_tensor.shape
-    norm_sq = torch.sum(embed_tensor ** 2, dim=1, keepdim=True).repeat(1, n)
-    dot_prod = torch.matmul(embed_tensor, embed_tensor.T)
-    dist_matrix = norm_sq - 2 * dot_prod + norm_sq.T
+def get_hardest_triplet(
+        embed_tensor: torch.Tensor,
+        label_similarity_matrix: torch.Tensor,
+        distance: TripletDistance) -> Triplet:
+    dist_matrix = distance.get_distance_matrix(embed_tensor)
 
     hardest_pos = (dist_matrix * label_similarity_matrix).argmax(dim=1, keepdim=True)
     neg_masked = dist_matrix * label_similarity_matrix.logical_not().int()
@@ -42,12 +81,9 @@ def get_hardest_triplet(embed_tensor: torch.Tensor, label_similarity_matrix: tor
         n=embed_tensor[hardest_neg, :].squeeze(dim=1))
 
 
-def get_triplet_accuracy_components(t: Triplet, margin: float) -> Tuple[int, int]:
-    av = torch.unsqueeze(t.a, dim=1)
-    pv = torch.unsqueeze(t.p, dim=1)
-    nv = torch.unsqueeze(t.n, dim=1)
-    n_correct = (torch.cdist(av, nv) - torch.cdist(av, pv) >= margin).int().sum().item()
-    return n_correct, av.shape[0]
+def get_triplet_accuracy_components(t: Triplet, margin: float, distance: TripletDistance) -> Tuple[int, int]:
+    n_correct = (distance(t.a, t.n) - distance(t.a, t.p) >= margin).int().sum().item()
+    return n_correct, t.a.shape[0]
 
 
 class TripletModel(Module):
@@ -57,12 +93,16 @@ class TripletModel(Module):
             backbone: Backbone,
             lr: float = 1e-3,
             momentum: float = 0.9,
-            margin: float = 0.5):
+            margin: float = 0.5,
+            distance: str = 'euclidean'):
         super().__init__()
         self.backbone = backbone
         self.lr = lr
         self.momentum = momentum
-        self.loss_fn = torch.nn.TripletMarginLoss(margin=margin)
+        self.distance = get_triplet_distance(distance)
+        self.loss_fn = torch.nn.TripletMarginWithDistanceLoss(
+            margin=margin,
+            distance_function=self.distance)
         self.pooling = torch.nn.AdaptiveAvgPool2d(1)
         self.margin = margin
 
@@ -79,15 +119,16 @@ class TripletModel(Module):
         xs, labels = batch
         embeds = self(xs)
         label_similarity_matrix = get_label_similarity_matrix(labels)
-        out = get_hardest_triplet(embed_tensor=embeds, label_similarity_matrix=label_similarity_matrix)
+        out = get_hardest_triplet(
+            embed_tensor=embeds, label_similarity_matrix=label_similarity_matrix, distance=self.distance)
         loss = self.loss_fn(out.a, out.p, out.n)
-        num_correct, num_total = get_triplet_accuracy_components(out, margin=self.margin)
+        num_correct, num_total = get_triplet_accuracy_components(out, margin=self.margin, distance=self.distance)
         return {'loss': loss, 'num_correct': num_correct, 'num_total': num_total}
 
     def validation_step(self, batch: TripletTuple, batch_idx: int) -> StepResult:
         out = self._forward_triplet(Triplet.from_tuple(batch))
         loss = self.loss_fn(out.a, out.p, out.n)
-        num_correct, num_total = get_triplet_accuracy_components(out, margin=self.margin)
+        num_correct, num_total = get_triplet_accuracy_components(out, margin=self.margin, distance=self.distance)
         return {'loss': loss, 'num_correct': num_correct, 'num_total': num_total}
 
     def configure_optimizers(self) -> OptimizerConfig:
@@ -119,7 +160,8 @@ def train_model(
         train_index_file_name: Optional[str] = None,
         test_index_file_name: Optional[str] = None,
         img_size: Tuple[int, int] = (224, 224),
-        backbone_version: str = 'b1'):
+        backbone_version: str = 'b1',
+        distance: str = 'euclidean'):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -159,7 +201,7 @@ def train_model(
         mode='max',
         patience=max_epochs_no_improvement)
     backbone = EfficientNet(pretrained=start_from_checkpoint_path is None, version=backbone_version)
-    model = TripletModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin)
+    model = TripletModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin, distance=distance)
     trainer = Trainer(
         auto_lr_find=True,
         gpus=1,
