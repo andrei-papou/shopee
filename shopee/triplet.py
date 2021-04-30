@@ -21,14 +21,14 @@ from shopee.types import Triplet, TripletTuple, OptimizerConfig
 
 
 def get_label_similarity_matrix(labels: torch.Tensor) -> torch.Tensor:
-    rows = torch.tile(torch.unsqueeze(labels, dim=1), dims=(1, len(labels)))
-    cols = torch.tile(torch.unsqueeze(labels, dim=0), dims=(len(labels), 1))
+    rows = torch.unsqueeze(labels, dim=1).repeat(1, len(labels))
+    cols = torch.unsqueeze(labels, dim=0).repeat(len(labels), 1)
     return torch.eq(rows, cols).int()
 
 
 def get_hardest_triplet(embed_tensor: torch.Tensor, label_similarity_matrix: torch.Tensor) -> Triplet:
     n, _ = embed_tensor.shape
-    norm_sq = torch.tile(torch.sum(embed_tensor ** 2, dim=1, keepdim=True), dims=(1, n))
+    norm_sq = torch.sum(embed_tensor ** 2, dim=1, keepdim=True).repeat(1, n)
     dot_prod = torch.matmul(embed_tensor, embed_tensor.T)
     dist_matrix = norm_sq - 2 * dot_prod + norm_sq.T
 
