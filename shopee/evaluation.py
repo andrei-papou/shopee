@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from shopee.datasets import PostingIdImageDataset
 from shopee.threshold import ThresholdFinder
+from shopee.postprocessing import build_transitive_relations, postprocess_matches_dict
 
 DEFAULT_DISTANCE_METRIC = 'minkowski'
 
@@ -24,8 +25,9 @@ def get_embedding_tuple(
         data_path: Path,
         batch_size: int = 64,
         num_workers: int = 4,
+        img_size: Tuple[int, int] = (224, 224),
         progress_bar: bool = False) -> Tuple[np.ndarray, List[str]]:
-    dataset = PostingIdImageDataset(df, data_path)
+    dataset = PostingIdImageDataset(df, data_path, img_size=img_size)
     data_loader = DataLoader(dataset, batch_size=batch_size, pin_memory=True, num_workers=num_workers)
 
     embedding_list: List[torch.Tensor] = []
@@ -70,13 +72,13 @@ def get_f1_mean_for_matches(
         true_match_mask = np.array([int(pid in true_match_pid_set) for pid in pid_list])
         pred_match_mask = np.array([int(pid in pred_match_pid_set) for pid in pid_list])
         f1_val_list.append(f1_score(true_match_mask, pred_match_mask))
-        true_match_count_list.append(len(true_match_pid_set))
-        pred_match_count_list.append(len(pred_match_pid_set))
-        p_bar.set_description(
-            'f1_mean calculation, '
-            f'score: {mean(f1_val_list):.5f}, '
-            f'n_true: {mean(true_match_count_list):.2f}, '
-            f'n_pred: {mean(pred_match_count_list):.2f}')
+        # true_match_count_list.append(len(true_match_pid_set))
+        # pred_match_count_list.append(len(pred_match_pid_set))
+        # p_bar.set_description(
+        #     'f1_mean calculation, '
+        #     f'score: {mean(f1_val_list):.5f}, '
+        #     f'n_true: {mean(true_match_count_list):.2f}, '
+        #     f'n_pred: {mean(pred_match_count_list):.2f}')
     return mean(f1_val_list)
 
 
@@ -167,7 +169,9 @@ def evaluate_embeddings(
         threshold: Union[ThresholdFinder, float],
         use_phash: bool = True,
         test_set_file_name: str = 'test-set.csv',
-        distance_metric: str = DEFAULT_DISTANCE_METRIC):
+        distance_metric: str = DEFAULT_DISTANCE_METRIC,
+        transitive_relations_rounds: int = 0,
+        postprocess: bool = False):
     eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
 
     embedding_matrix, posting_id_list = embedding_tuple
@@ -211,6 +215,12 @@ def evaluate_embeddings(
         ]) if phash_pred_matches_dict is not None else distance_pred_matches_dict
     else:
         raise TypeError(f'Invalid threshold type: {type(threshold)}.')
+
+    if transitive_relations_rounds > 0:
+        pred_matches_dict = build_transitive_relations(pred_matches_dict, rounds=transitive_relations_rounds)
+    if postprocess:
+        pred_matches_dict = postprocess_matches_dict(pred_matches_dict)
+
     score = get_f1_mean_for_matches(
         true_matches_dict=true_matches_dict,
         pred_matches_dict=pred_matches_dict)
@@ -236,11 +246,13 @@ def evaluate_embeddings_clustering(
         embedding_tuple: Tuple[np.ndarray, List[str]],
         index_root_path: str,
         threshold: Union[ThresholdFinder, float],
+        distance_metric: str = 'euclidean',
         test_set_file_name: str = 'test-set.csv'):
     eval_df = pd.read_csv(Path(index_root_path) / test_set_file_name)
 
     embedding_matrix, posting_id_list = embedding_tuple
-    ac = AgglomerativeClustering(distance_threshold=threshold, n_clusters=None, linkage='single')
+    ac = AgglomerativeClustering(
+        distance_threshold=threshold, n_clusters=None, linkage='single', affinity=distance_metric)
     labels = ac.fit_predict(embedding_matrix)
 
     pred_matches_dict = {}

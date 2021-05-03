@@ -12,7 +12,7 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from shopee.backbones import Backbone, EfficientNet
+from shopee.backbones import Backbone, EfficientNet, create_backbone
 from shopee.checkpoint import create_checkpoint_callback
 from shopee.datasets import PrecomputedTripletImageDataset, ImageLabelGroupDataset
 from shopee.module import Module, StepResult
@@ -160,8 +160,10 @@ def train_model(
         train_index_file_name: Optional[str] = None,
         test_index_file_name: Optional[str] = None,
         img_size: Tuple[int, int] = (224, 224),
-        backbone_version: str = 'b1',
-        distance: str = 'euclidean'):
+        backbone_label: str = 'efficientnetb1',
+        distance: str = 'euclidean',
+        gpus: Optional[int] = None,
+        tpus: Optional[int] = None):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -200,12 +202,13 @@ def train_model(
         monitor='valid_accuracy',
         mode='max',
         patience=max_epochs_no_improvement)
-    backbone = EfficientNet(pretrained=start_from_checkpoint_path is None, version=backbone_version)
+    backbone = create_backbone(label=backbone_label, pretrained=start_from_checkpoint_path is None)
     model = TripletModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin, distance=distance)
     trainer = Trainer(
         auto_lr_find=True,
-        gpus=1,
-        auto_select_gpus=True,
+        gpus=gpus,
+        auto_select_gpus=gpus is not None,
+        tpu_cores=tpus,
         max_epochs=num_epochs,
         logger=logger,
         resume_from_checkpoint=start_from_checkpoint_path,
@@ -220,7 +223,7 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str, backbone_version: str = 'b1') -> TripletModel:
+def load_model(checkpoint_path: str, backbone_label: str = 'efficientnetb1') -> TripletModel:
     return TripletModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=EfficientNet(pretrained=False, version=backbone_version)).cuda()
+        backbone=create_backbone(pretrained=False, label=backbone_label)).cuda()

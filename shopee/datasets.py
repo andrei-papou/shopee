@@ -161,10 +161,11 @@ class PostingIdImageDataset(Dataset):
             self,
             df: pd.DataFrame,
             image_folder_path: Path,
+            img_size: Tuple[int, int] = (224, 224),
             augmentation_list: Optional[List[alb.BasicTransform]] = None):
         self._df = df
         self._image_folder_path = image_folder_path
-        self._augmenter = ImageAugmenter(augmentation_list)
+        self._augmenter = ImageAugmenter(augmentation_list, img_size=img_size)
 
     def __len__(self) -> int:
         return len(self._df)

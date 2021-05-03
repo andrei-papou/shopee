@@ -1,5 +1,5 @@
 import re
-from typing import FrozenSet, Optional, Tuple, List, Union
+from typing import FrozenSet, Optional, Tuple, List, Union, Dict
 
 import numpy as np
 import pandas as pd
@@ -29,6 +29,15 @@ def preprocess_alpha_token(tok: str) -> str:
     if tok == 'g':
         return 'gr'
     return tok
+
+
+def read_indoneasian_to_english(path: str) -> Dict[str, str]:
+    result = {}
+    with open(path) as f:
+        for line in f:
+            ind, eng = line.split(' ')
+            result[ind.lower()] = eng.lower()
+    return result
 
 
 def preprocess_title(title: str) -> str:
