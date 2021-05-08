@@ -1,7 +1,7 @@
 import pickle
 from pathlib import Path
 from statistics import mean
-from typing import Dict, Set, Tuple, List, Union
+from typing import Dict, Set, Tuple, List, Union, Optional
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ def get_embedding_tuple(
     with torch.no_grad():
         it = tqdm(data_loader, desc='embedding dict generation') if progress_bar else data_loader
         for pid_list, x in it:
-            embedding_list.append(model(x.cuda()).cpu())
+            embedding_list.append(model.forward_features(x.cuda()).cpu())
             posting_id_list.extend(pid_list)
     return torch.cat(embedding_list, dim=0).numpy(), posting_id_list
 
@@ -72,13 +72,13 @@ def get_f1_mean_for_matches(
         true_match_mask = np.array([int(pid in true_match_pid_set) for pid in pid_list])
         pred_match_mask = np.array([int(pid in pred_match_pid_set) for pid in pid_list])
         f1_val_list.append(f1_score(true_match_mask, pred_match_mask))
-        # true_match_count_list.append(len(true_match_pid_set))
-        # pred_match_count_list.append(len(pred_match_pid_set))
-        # p_bar.set_description(
-        #     'f1_mean calculation, '
-        #     f'score: {mean(f1_val_list):.5f}, '
-        #     f'n_true: {mean(true_match_count_list):.2f}, '
-        #     f'n_pred: {mean(pred_match_count_list):.2f}')
+        true_match_count_list.append(len(true_match_pid_set))
+        pred_match_count_list.append(len(pred_match_pid_set))
+        p_bar.set_description(
+            'f1_mean calculation, '
+            f'score: {mean(f1_val_list):.5f}, '
+            f'n_true: {mean(true_match_count_list):.2f}, '
+            f'n_pred: {mean(pred_match_count_list):.2f}')
     return mean(f1_val_list)
 
 

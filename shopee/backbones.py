@@ -1,5 +1,5 @@
 import abc
-from typing import List, Type
+from typing import Union, List
 
 import torch
 from timm import create_model
@@ -9,7 +9,7 @@ from timm.models.resnet import ResNet as _ResNet
 
 class Backbone(torch.nn.Module, metaclass=abc.ABCMeta):
 
-    def __call__(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def __call__(self, x: Union[torch.Tensor, List[torch.Tensor]], *args, **kwargs) -> torch.Tensor:
         return super().__call__(x, *args, **kwargs)
 
     @property
@@ -63,9 +63,59 @@ class EfficientNet(Backbone):
         return 'efficientnet'
 
 
-def create_backbone(label: str, pretrained: bool = True) -> Backbone:
+def create_image_backbone(label: str, pretrained: bool = True) -> Backbone:
     if label.startswith(ResNet.get_label_prefix()):
         return ResNet(pretrained=pretrained, version=label.replace(ResNet.get_label_prefix(), ''))
     elif label.startswith(EfficientNet.get_label_prefix()):
         return EfficientNet(pretrained=pretrained, version=label.replace(EfficientNet.get_label_prefix(), ''))
     raise ValueError(f'Unsupported backbone: {label}.')
+
+
+class LSTM(Backbone):
+
+    def __init__(
+            self,
+            word_emb_dim: int,
+            rnn_hidden_dim: int,
+            num_features: int,
+            rnn_num_layers: int = 1,
+            dropout: float = 0.5):
+        super().__init__()
+        self._rnn = torch.nn.LSTM(
+            input_size=word_emb_dim,
+            hidden_size=rnn_hidden_dim,
+            num_layers=rnn_num_layers,
+            bidirectional=True)
+        self._dropout = torch.nn.Dropout(dropout)
+        self._fc = torch.nn.Linear(rnn_hidden_dim * 2, num_features)
+
+    def forward(self, x: List[torch.Tensor]) -> torch.Tensor:
+        x = torch.nn.utils.rnn.pack_sequence(x, enforce_sorted=False)
+        _, (out, _) = self._rnn(x)
+        out = self._dropout(torch.cat((out[-2, :, :], out[-1, :, :]), dim=1))
+        return self._fc(out)
+
+    @property
+    def num_features(self) -> int:
+        return self._fc.out_features
+
+    @classmethod
+    def get_label_prefix(cls) -> str:
+        return 'lstm'
+
+
+def create_text_backbone(
+        label: str,
+        word_emb_dim: int,
+        rnn_hidden_dim: int,
+        num_features: int,
+        rnn_num_layers: int = 1,
+        dropout: float = 0.5) -> Backbone:
+    if label.startswith(LSTM.get_label_prefix()):
+        return LSTM(
+            word_emb_dim=word_emb_dim,
+            rnn_hidden_dim=rnn_hidden_dim,
+            num_features=num_features,
+            rnn_num_layers=rnn_num_layers,
+            dropout=dropout)
+    raise ValueError(f'Unknown backbone label: {label}.')

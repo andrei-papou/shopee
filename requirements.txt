@@ -5,8 +5,9 @@ pandas==1.*
 pytorch-lightning==1.*
 scikit-learn==0.*
 tensorboard==2.*
-timm==0.*
 torch==1.*
 torchvision==0.*
+torchtext==0.*
 tqdm==4.*
 typing-extensions==3.*
+git+https://github.com/rwightman/pytorch-image-models.git

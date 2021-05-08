@@ -9,6 +9,7 @@ import torch.nn.functional as torch_f
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.loggers import LightningLoggerBase
+from timm import create_model
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -74,34 +75,94 @@ class ArcFaceModel(Module):
 
     def __init__(
             self,
-            backbone: Backbone,
-            n_classes: int,
-            lr: float = 1e-3,
+            model_name: str,
+            n_classes: int = 11014,
+            fc_dim: int = 512,
+            margin: float = 0.5,
             scale: float = 30.0,
-            margin: float = 0.50,
-            ls_eps: float = 0.0,
-            monitor_metric: str = 'valid_loss',
-            monitor_mode: str = 'min'):
+            use_fc: bool = True,
+            pretrained: bool = False,
+            lr: float = 1e-3):
         super().__init__()
+        print('Building Model Backbone for {} model'.format(model_name))
 
-        self.backbone = backbone
+        self.backbone = create_model(model_name, pretrained=pretrained)
+
+        if model_name == 'resnext50_32x4d':
+            final_in_features = self.backbone.fc.in_features
+            self.apply_pooling = True
+            self.backbone.fc = torch.nn.Identity()
+            self.backbone.global_pool = torch.nn.Identity()
+
+        elif model_name == 'efficientnet_b3':
+            final_in_features = self.backbone.classifier.in_features
+            self.apply_pooling = True
+            self.backbone.classifier = torch.nn.Identity()
+            self.backbone.global_pool = torch.nn.Identity()
+
+        elif model_name == 'tf_efficientnet_b5_ns':
+            final_in_features = self.backbone.classifier.in_features
+            self.apply_pooling = True
+            self.backbone.classifier = torch.nn.Identity()
+            self.backbone.global_pool = torch.nn.Identity()
+
+        elif model_name == 'eca_nfnet_l0':
+            final_in_features = self.backbone.head.fc.in_features
+            self.apply_pooling = True
+            self.backbone.head.fc = torch.nn.Identity()
+            self.backbone.head.global_pool = torch.nn.Identity()
+
+        elif model_name == 'swin_small_patch4_window7_224':
+            final_in_features = self.backbone.num_features
+            self.apply_pooling = False
+            self.backbone.head = torch.nn.Identity()
+
+        else:
+            raise ValueError(f'Unknown model_name = "{model_name}".')
+
         self.pooling = torch.nn.AdaptiveAvgPool2d(1)
+
+        self.use_fc = use_fc
+
+        self.dropout = torch.nn.Dropout(p=0.0)
+        self.fc = torch.nn.Linear(final_in_features, fc_dim)
+        self.bn = torch.nn.BatchNorm1d(fc_dim)
+        self._init_params()
+        final_in_features = fc_dim
+
         self.final = ArcMarginProduct(
-            self.backbone.num_features,
+            final_in_features,
             n_classes,
             scale=scale,
             margin=margin,
             easy_margin=False,
-            ls_eps=ls_eps)
+            ls_eps=0.0
+        )
         self.loss_fn = torch.nn.CrossEntropyLoss()
-        self.lr = lr
-        self._monitor_metric = monitor_metric
-        self._monitor_mode = monitor_mode
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.lr = lr
+
+    def _init_params(self):
+        torch.nn.init.xavier_normal_(self.fc.weight)
+        torch.nn.init.constant_(self.fc.bias, 0)
+        torch.nn.init.constant_(self.bn.weight, 1)
+        torch.nn.init.constant_(self.bn.bias, 0)
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        feature = self.extract_feat(image)
+        return feature
+
+    def extract_feat(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.shape[0]
         x = self.backbone(x)
-        return self.pooling(x).view(batch_size, -1)
+        if self.apply_pooling:
+            x = self.pooling(x).view(batch_size, -1)
+
+        if self.use_fc:
+            x = self.dropout(x)
+            x = self.fc(x)
+            x = self.bn(x)
+        return x
 
     def _step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> StepResult:
         x, y = batch
@@ -118,11 +179,11 @@ class ArcFaceModel(Module):
 
     def configure_optimizers(self) -> OptimizerConfig:
         optimizer = Adam(self.parameters(), lr=self.lr)
-        lr_scheduler = ReduceLROnPlateau(optimizer=optimizer, mode=self._monitor_mode, factor=0.1, patience=3)
+        lr_scheduler = ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.1, patience=3)
         return {
             'optimizer': optimizer,
             'lr_scheduler': lr_scheduler,
-            'monitor': self._monitor_metric,
+            'monitor': 'train_loss',
         }
 
 
@@ -130,7 +191,6 @@ def train_model(
         index_root_path: str,
         data_root_path: str,
         checkpoint_file_path: str,
-        logger: LightningLoggerBase,
         lr: float = 1e-3,
         num_epochs: int = 20,
         margin: float = 0.5,
@@ -138,14 +198,16 @@ def train_model(
         train_batch_size: int = 64,
         valid_batch_size: int = 64,
         num_workers: int = 2,
+        img_size: Tuple[int, int] = (224, 224),
+        logger: Optional[LightningLoggerBase] = None,
         train_index_file_name: Optional[str] = None,
         test_index_file_name: Optional[str] = None,
         start_from_checkpoint_path: Optional[str] = None,
-        backbone_version: str = 'b3',
+        backbone_version: str = 'swin_small_patch4_window7_224',
         accumulate_grad_batches: int = 1,
         monitor_metric: str = 'valid_loss',
         monitor_mode: str = 'min',
-        check_val_every_n_epoch: int = 1):
+        check_val_every_n_epoch: int = 1000):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -157,13 +219,17 @@ def train_model(
     train_dataset = ImageClsDataset(
         df=train_df,
         image_folder_path=image_folder_path,
+        img_size=img_size,
         augmentation_list=[
             alb.HorizontalFlip(p=0.5),
             alb.VerticalFlip(p=0.5),
             alb.Rotate(limit=120, p=0.8),
             alb.RandomBrightness(limit=(0.09, 0.6), p=0.5),
         ])
-    valid_dataset = ImageClsDataset(df=test_df, image_folder_path=image_folder_path)
+    valid_dataset = ImageClsDataset(
+        df=test_df,
+        image_folder_path=image_folder_path,
+        img_size=img_size)
     train_data_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_batch_size,
@@ -184,14 +250,11 @@ def train_model(
         monitor=monitor_metric,
         mode=monitor_mode,
         patience=max_epochs_no_improvement)
-    backbone = EfficientNet(pretrained=start_from_checkpoint_path is None, version=backbone_version)
     model = ArcFaceModel(
-        backbone=backbone,
+        model_name=backbone_version,
         n_classes=num_classes,
-        lr=lr,
         margin=margin,
-        monitor_metric=monitor_metric,
-        monitor_mode=monitor_mode)
+        lr=lr)
     trainer = Trainer(
         auto_lr_find=True,
         gpus=1,
@@ -211,8 +274,8 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str, n_classes: int, backbone_version: str = 'b3') -> ArcFaceModel:
+def load_model(checkpoint_path: str, n_classes: int, backbone_version: str) -> ArcFaceModel:
     return ArcFaceModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
-        backbone=EfficientNet(pretrained=False, version=backbone_version),
+        model_name=backbone_version,
         n_classes=n_classes).cuda()
