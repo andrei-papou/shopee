@@ -10,4 +10,4 @@ torchvision==0.*
 torchtext==0.*
 tqdm==4.*
 typing-extensions==3.*
-git+https://github.com/rwightman/pytorch-image-models.git#egg=timm
+git+https://github.com/rwightman/pytorch-image-models.git@master#egg=timm

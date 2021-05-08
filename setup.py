@@ -14,6 +14,7 @@ def read_requirements(req_file_path: str) -> List[str]:
     requirement_url_list = []
     with open(req_file_path) as req_file:
         for s in req_file.readlines():
+            s = s.strip()
             if not s or s.startswith('-f '):
                 continue
             requirement_url = s.replace(GITHUB_TOKEN_VAR1, token).replace(GITHUB_TOKEN_VAR2, token)
@@ -23,6 +24,7 @@ def read_requirements(req_file_path: str) -> List[str]:
                 requirement_url_list.append(query_dict['egg'] + ' @ ' + requirement_url)
             else:
                 requirement_url_list.append(requirement_url)
+        print(requirement_url_list)
         return requirement_url_list
 
 
