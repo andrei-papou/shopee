@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Tuple, Optional, List, Dict, TypedDict, NamedTuple, Counter as CounterT
+from typing import Tuple, Optional, List, Dict, NamedTuple
 
 import albumentations as alb
 import cv2
@@ -14,8 +13,8 @@ import pandas as pd
 import torch
 from albumentations.pytorch.transforms import ToTensorV2
 from torch.utils.data import Dataset
-from torchtext.vocab import Vocab, Vectors, FastText
-from transformers import PreTrainedTokenizer, AutoTokenizer
+from torchtext.vocab import FastText
+from transformers import AutoTokenizer
 
 
 class DataType(str, Enum):
