@@ -205,7 +205,7 @@ def train_model(
         start_from_checkpoint_path: Optional[str] = None,
         backbone_version: str = 'swin_small_patch4_window7_224',
         accumulate_grad_batches: int = 1,
-        monitor_metric: str = 'valid_loss',
+        monitor_metric: str = 'train_loss',
         monitor_mode: str = 'min',
         check_val_every_n_epoch: int = 1000):
     data_root_path = Path(data_root_path)
