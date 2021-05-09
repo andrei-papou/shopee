@@ -173,7 +173,8 @@ def train_model(
         backbone_label: str = 'swin_small_patch4_window7_224',
         distance: str = 'cosine',
         gpus: Optional[int] = None,
-        tpus: Optional[int] = None):
+        tpus: Optional[int] = None,
+        apply_pooling: bool = False):
     data_root_path = Path(data_root_path)
     image_folder_path = data_root_path / 'train_images'
 
@@ -213,7 +214,13 @@ def train_model(
         mode='max',
         patience=max_epochs_no_improvement)
     backbone = create_image_backbone(label=backbone_label, pretrained=start_from_checkpoint_path is None)
-    model = TripletModel(backbone=backbone, lr=lr, momentum=momentum, margin=margin, distance=distance)
+    model = TripletModel(
+        backbone=backbone,
+        lr=lr,
+        momentum=momentum,
+        margin=margin,
+        distance=distance,
+        apply_pooling=apply_pooling)
     trainer = Trainer(
         auto_lr_find=True,
         gpus=gpus,
