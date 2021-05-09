@@ -170,8 +170,8 @@ def train_model(
         train_index_file_name: Optional[str] = None,
         test_index_file_name: Optional[str] = None,
         img_size: Tuple[int, int] = (224, 224),
-        backbone_label: str = 'efficientnetb1',
-        distance: str = 'euclidean',
+        backbone_label: str = 'swin_small_patch4_window7_224',
+        distance: str = 'cosine',
         gpus: Optional[int] = None,
         tpus: Optional[int] = None):
     data_root_path = Path(data_root_path)
@@ -233,7 +233,7 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str, backbone_label: str = 'efficientnetb1') -> TripletModel:
+def load_model(checkpoint_path: str, backbone_label: str = 'swin_small_patch4_window7_224') -> TripletModel:
     return TripletModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
         backbone=create_image_backbone(pretrained=False, label=backbone_label)).cuda()

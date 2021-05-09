@@ -35,7 +35,9 @@ def get_embedding_tuple(
     with torch.no_grad():
         it = tqdm(data_loader, desc='embedding dict generation') if progress_bar else data_loader
         for pid_list, x in it:
-            embedding_list.append(model.forward_features(x.cuda()).cpu())
+            y = model(x.cuda()).cpu()
+            # print(y.shape)
+            embedding_list.append(y)
             posting_id_list.extend(pid_list)
     return torch.cat(embedding_list, dim=0).numpy(), posting_id_list
 

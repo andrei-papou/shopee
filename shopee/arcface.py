@@ -274,7 +274,10 @@ def train_model(
         val_dataloaders=valid_data_loader)
 
 
-def load_model(checkpoint_path: str, n_classes: int, backbone_version: str) -> ArcFaceModel:
+def load_model(
+        checkpoint_path: str,
+        n_classes: int = 11014,
+        backbone_version: str = 'swin_small_patch4_window7_224') -> ArcFaceModel:
     return ArcFaceModel.load_from_checkpoint(
         checkpoint_path=checkpoint_path,
         model_name=backbone_version,
